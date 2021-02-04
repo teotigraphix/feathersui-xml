@@ -170,10 +170,10 @@ class XmlComponent {
 		componentCounter++;
 		var typeDef:TypeDefinition = null;
 		if (classType == null) {
-			typeDef = macro class $componentName{};
+			typeDef = macro class $componentName {};
 		} else {
 			var superClassTypePath = {name: classType.name, pack: classType.pack};
-			typeDef = macro class $componentName extends $superClassTypePath{};
+			typeDef = macro class $componentName extends $superClassTypePath {};
 		}
 		for (buildField in buildFields) {
 			typeDef.fields.push(buildField);
@@ -236,6 +236,32 @@ class XmlComponent {
 		return null;
 	}
 
+	private static function findEvent(type:ClassType, eventName:String):MetadataEntry {
+		for (eventMeta in getAllEvents(type)) {
+			var otherEventName = getEventName(eventMeta);
+			if (otherEventName == eventName) {
+				return eventMeta;
+			}
+		}
+		return null;
+	}
+
+	private static function getEventName(eventMeta:MetadataEntry):String {
+		var typedExprDef = Context.typeExpr(eventMeta.params[0]).expr;
+		return switch (typedExprDef) {
+			case TCast(e, m):
+				switch (e.expr) {
+					case TConst(c):
+						switch (c) {
+							case TString(s): s;
+							default: null;
+						}
+					default: null;
+				}
+			default: null;
+		};
+	}
+
 	private static function parseChildrenOfObject(element:Xml, parentType:ClassType, targetIdentifier:String, parentPrefix:String,
 			prefixMap:Map<String, String>, parentFields:Array<Field>, initExprs:Array<Expr>):Void {
 		var defaultChildren:Array<Xml> = null;
@@ -244,6 +270,36 @@ class XmlComponent {
 			switch (child.nodeType) {
 				case Element:
 					var childXmlName = getXmlName(child);
+					if (isXmlLanguageElement("Binding", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Component", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Declarations", childXmlName, prefixMap)) {
+						if (targetIdentifier == "this") {
+							parseDeclarations(child, prefixMap, parentFields, initExprs);
+						} else {
+							Context.fatalError('The \'<${child.nodeName}>\' tag must be a child of the root element', Context.currentPos());
+						}
+						continue;
+					} else if (isXmlLanguageElement("Definition", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("DesignLayer", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Library", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Metadata", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Model", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Private", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Reparent", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Script", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					} else if (isXmlLanguageElement("Style", childXmlName, prefixMap)) {
+						Context.fatalError('The \'<${child.nodeName}>\' tag is not supported', Context.currentPos());
+					}
 					var foundField:ClassField = null;
 					if (childXmlName.prefix == parentPrefix) {
 						var localName = childXmlName.localName;
@@ -325,6 +381,48 @@ class XmlComponent {
 
 		parseChildrenForField(defaultChildren.iterator(), targetIdentifier, defaultField, defaultField.name, defaultField.type, prefixMap, parentFields,
 			initExprs);
+	}
+
+	private static function parseDeclarations(element:Xml, prefixMap:Map<String, String>, parentFields:Array<Field>, initExprs:Array<Expr>):Void {
+		for (child in element.iterator()) {
+			switch (child.nodeType) {
+				case Element:
+					var childXmlName = getXmlName(child);
+					var objectID = child.get(PROPERTY_ID);
+					var initExpr:Expr = null;
+					if (isBuiltIn(childXmlName, prefixMap) && childXmlName.localName != "Dynamic" && childXmlName.localName != "Array") {
+						// TODO: parse attributes too
+						for (grandChild in child.iterator()) {
+							var str = StringTools.trim(grandChild.nodeValue);
+							initExpr = createValueExprForDynamic(str);
+							var complexType = Context.toComplexType(Context.typeExpr(initExpr).t);
+							if (objectID != null) {
+								parentFields.push({
+									name: objectID,
+									pos: Context.currentPos(),
+									kind: FVar(complexType),
+									access: [APublic]
+								});
+							}
+						}
+					} else {
+						var functionName:String = parseChildElement(child, prefixMap, parentFields);
+						initExpr = macro $i{functionName}();
+					}
+					if (objectID != null) {
+						initExpr = macro this.$objectID = $initExpr;
+					}
+					initExprs.push(initExpr);
+				case PCData:
+					var str = StringTools.trim(child.nodeValue);
+					if (str.length == 0) {
+						continue;
+					}
+					Context.fatalError('The \'${child.nodeValue}\' value is unexpected', Context.currentPos());
+				default:
+					Context.fatalError('Cannot parse XML child \'${child.nodeValue}\' of type \'${child.nodeType}\'', Context.currentPos());
+			}
+		}
 	}
 
 	private static function parseChildrenForField(children:Iterator<Xml>, targetIdentifier:String, field:ClassField, fieldName:String,
@@ -528,17 +626,24 @@ class XmlComponent {
 		return fields;
 	}
 
+	private static function getAllEvents(type:ClassType):Array<MetadataEntry> {
+		if (type == null) {
+			return [];
+		}
+		var events = type.meta.extract(":event").filter(eventMeta -> eventMeta.params.length == 1);
+		var superClass = type.superClass;
+		if (superClass != null) {
+			for (event in getAllEvents(superClass.t.get())) {
+				events.push(event);
+			}
+		}
+		return events;
+	}
+
 	private static function parseAttributes(element:Xml, parentType:ClassType, targetIdentifier:String, prefixMap:Map<String, String>,
 			initExprs:Array<Expr>):Void {
 		for (attribute in element.attributes()) {
-			var foundField:ClassField = null;
-			for (field in getAllFields(parentType)) {
-				if (field.name != attribute) {
-					continue;
-				}
-				foundField = field;
-				break;
-			}
+			var foundField:ClassField = findField(parentType, attribute);
 			if (foundField != null) {
 				var fieldValue = element.get(attribute);
 				var valueExpr = createValueExprForField(foundField, fieldValue);
@@ -549,8 +654,17 @@ class XmlComponent {
 				var valueExpr = createValueExprForDynamic(fieldValue);
 				var setExpr = macro $i{targetIdentifier}.$attribute = ${valueExpr};
 				initExprs.push(setExpr);
-			} else if (RESERVED_PROPERTIES.indexOf(attribute) == -1 && !StringTools.startsWith(attribute, PROPERTY_XMLNS_PREFIX)) {
-				Context.fatalError('Unknown field \'${attribute}\'', Context.currentPos());
+			} else {
+				var foundEvent = findEvent(parentType, attribute);
+				if (foundEvent != null) {
+					var eventName = getEventName(foundEvent);
+					var eventText = element.get(attribute);
+					var eventExpr = Context.parse(eventText, Context.currentPos());
+					var addEventExpr = macro $i{targetIdentifier}.addEventListener($v{eventName}, (event) -> ${eventExpr});
+					initExprs.push(addEventExpr);
+				} else if (RESERVED_PROPERTIES.indexOf(attribute) == -1 && !StringTools.startsWith(attribute, PROPERTY_XMLNS_PREFIX)) {
+					Context.fatalError('Unknown field \'${attribute}\'', Context.currentPos());
+				}
 			}
 		}
 	}
@@ -736,6 +850,14 @@ class XmlComponent {
 			return true;
 		}
 		return false;
+	}
+
+	private static function isXmlLanguageElement(elementName:String, xmlName:XmlName, prefixMap:Map<String, String>):Bool {
+		var prefix = xmlName.prefix;
+		if (!prefixMap.exists(prefix)) {
+			Context.fatalError('Unknown XML namespace prefix \'${prefix}\'', Context.currentPos());
+		}
+		return xmlName.localName == elementName && prefixMap.get(prefix) == URI_HAXE;
 	}
 	#end
 }
